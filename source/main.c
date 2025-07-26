@@ -40,6 +40,7 @@ volatile unsigned short* back_buffer = VRAM_PAGE0;
 
 // --- Input Constants ---
 #define KEY_A 0x0001
+#define KEY_B 0x0002
 
 // --- Math and Camera ---
 #define FIXED_SHIFT 12 // Use 12-bit fractional part for high-res LUT
@@ -50,6 +51,7 @@ volatile unsigned short* back_buffer = VRAM_PAGE0;
 typedef struct { int x, y, z; } Point3D;
 typedef struct { int x, y; } Point2D;
 enum ModelType { MODEL_CUBE, MODEL_TORUS };
+enum CameraType { CAMERA_PERSPECTIVE, CAMERA_ORTHOGRAPHIC };
 
 // --- Cube Model Data ---
 #define NUM_CUBE_VERTICES 8
@@ -140,6 +142,7 @@ int main() {
     generate_torus(50, 20);
 
     enum ModelType current_model = MODEL_CUBE;
+    enum CameraType current_camera = CAMERA_PERSPECTIVE;
     unsigned short last_keys = 0;
     unsigned int angle_x = 0, angle_y = 0, anim_angle = 0;
     Point2D projected_points[NUM_TORUS_VERTICES];
@@ -154,6 +157,9 @@ int main() {
         unsigned short current_keys = ~REG_KEYINPUT;
         if ((current_keys & KEY_A) && !(last_keys & KEY_A)) {
             current_model = (current_model == MODEL_CUBE) ? MODEL_TORUS : MODEL_CUBE;
+        }
+        if ((current_keys & KEY_B) && !(last_keys & KEY_B)) {
+            current_camera = (current_camera == CAMERA_PERSPECTIVE) ? CAMERA_ORTHOGRAPHIC : CAMERA_PERSPECTIVE;
         }
         last_keys = current_keys;
 
@@ -184,13 +190,19 @@ int main() {
             Point3D temp, rotated;
             temp.x = (p.x * cos_y - p.z * sin_y) >> FIXED_SHIFT; temp.z = (p.x * sin_y + p.z * cos_y) >> FIXED_SHIFT; temp.y = p.y;
             rotated.y = (temp.y * cos_x - temp.z * sin_x) >> FIXED_SHIFT; rotated.z = (temp.y * sin_x + temp.z * cos_x) >> FIXED_SHIFT; rotated.x = temp.x;
-            rotated.z += Z_OFFSET;
-            if (rotated.z > 0) {
-                int p_factor = (VIEWER_DISTANCE << FIXED_SHIFT) / rotated.z;
-                projected_points[i].x = ((rotated.x * p_factor) >> FIXED_SHIFT) + (SCREEN_WIDTH / 2);
-                projected_points[i].y = ((rotated.y * p_factor) >> FIXED_SHIFT) + (SCREEN_HEIGHT / 2);
-            } else {
-                projected_points[i].x = -10000;
+            
+            if (current_camera == CAMERA_PERSPECTIVE) {
+                rotated.z += Z_OFFSET;
+                if (rotated.z > 0) {
+                    int p_factor = (VIEWER_DISTANCE << FIXED_SHIFT) / rotated.z;
+                    projected_points[i].x = ((rotated.x * p_factor) >> FIXED_SHIFT) + (SCREEN_WIDTH / 2);
+                    projected_points[i].y = ((rotated.y * p_factor) >> FIXED_SHIFT) + (SCREEN_HEIGHT / 2);
+                } else {
+                    projected_points[i].x = -10000;
+                }
+            } else { // Orthographic
+                projected_points[i].x = rotated.x + (SCREEN_WIDTH / 2);
+                projected_points[i].y = rotated.y + (SCREEN_HEIGHT / 2);
             }
         }
 
@@ -229,13 +241,15 @@ int main() {
         ticks_to_ms_string(logic_ticks, buffer); sprintf(final_buffer, "LOGIC: %sms", buffer); draw_string(5, 15, final_buffer, 2);
         ticks_to_ms_string(render_ticks, buffer); sprintf(final_buffer, "RENDER: %sms", buffer); draw_string(5, 25, final_buffer, 2);
         ticks_to_ms_string(vsync_ticks, buffer); sprintf(final_buffer, "VSYNC: %sms", buffer); draw_string(5, 35, final_buffer, 2);
+        sprintf(buffer, "CAM: %s", (current_camera == CAMERA_PERSPECTIVE) ? "PERSP" : "ORTHO");
+        draw_string(5, 45, buffer, 2);
 
         flip_page();
 
         // --- Update angles for next frame ---
         angle_x = (angle_x + 32) & 4095;
         angle_y = (angle_y + 16) & 4095;
-        anim_angle = (anim_angle + 16) & 4095;
+        anim_angle = (anim_angle + 48) & 4095;
     }
     return 0;
 }

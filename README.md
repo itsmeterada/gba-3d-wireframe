@@ -5,6 +5,7 @@ This is a simple 3D graphics demo for the Nintendo Game Boy Advance (GBA). It re
 ## Controls
 
 - **A Button:** Switch between the cube and torus models.
+- **B Button:** Toggle between Perspective and Orthographic cameras.
 
 ## Features
 
