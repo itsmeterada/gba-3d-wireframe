@@ -167,8 +167,6 @@ int main() {
         clear_screen(0);
         short sin_x = sin_lut_12bit[angle_x], cos_x = sin_lut_12bit[(angle_x + 1024) & 4095];
         short sin_y = sin_lut_12bit[angle_y], cos_y = sin_lut_12bit[(angle_y + 1024) & 4095];
-        // A constant scale value (no animation)
-        short scale_val = 1 << FIXED_SHIFT;
 
         Point3D* vertices;
         unsigned short (*edges)[2];
@@ -187,7 +185,6 @@ int main() {
         // --- Render ---
         for (int i = 0; i < num_vertices; i++) {
             Point3D p = vertices[i];
-            p.x = (p.x * scale_val) >> FIXED_SHIFT; p.y = (p.y * scale_val) >> FIXED_SHIFT; p.z = (p.z * scale_val) >> FIXED_SHIFT;
             Point3D temp, rotated;
             temp.x = (p.x * cos_y - p.z * sin_y) >> FIXED_SHIFT; temp.z = (p.x * sin_y + p.z * cos_y) >> FIXED_SHIFT; temp.y = p.y;
             rotated.y = (temp.y * cos_x - temp.z * sin_x) >> FIXED_SHIFT; rotated.z = (temp.y * sin_x + temp.z * cos_x) >> FIXED_SHIFT; rotated.x = temp.x;
