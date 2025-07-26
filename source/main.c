@@ -12,8 +12,11 @@
 // Timer Registers
 #define REG_TM0CNT_L *(volatile unsigned short*)0x4000100
 #define REG_TM0CNT_H *(volatile unsigned short*)0x4000102
+#define REG_TM1CNT_L *(volatile unsigned short*)0x4000104
+#define REG_TM1CNT_H *(volatile unsigned short*)0x4000106
 #define TIMER_ENABLE 0x0080
-#define TIMER_FREQ_1 0x0000 // F_CPU
+#define TIMER_CASCADE 0x0004
+#define GBA_CLOCK_FREQ 16777216
 
 // --- Display Constants ---
 #define SCREEN_WIDTH 240
@@ -110,23 +113,14 @@ void clear_screen(unsigned char color) { unsigned short v = (color << 8) | color
 void draw_line(int x0, int y0, int x1, int y1, unsigned char color) { int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1; int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1; int err = dx + dy, e2; for (;;) { plot_pixel(x0, y0, color); if (x0 == x1 && y0 == y1) break; e2 = 2 * err; if (e2 >= dy) { err += dy; x0 += sx; } if (e2 <= dx) { err += dx; y0 += sy; } } }
 
 // --- Text Functions ---
-void draw_char(int x, int y, char c, unsigned char color) {
-    for (int row = 0; row < 8; row++) {
-        unsigned char row_data = font_data[(int)c][row];
-        for (int col = 0; col < 8; col++) {
-            if ((row_data >> (7 - col)) & 1) {
-                plot_pixel(x + col, y + row, color);
-            }
-        }
-    }
-}
+void draw_char(int x, int y, char c, unsigned char color) { for (int row = 0; row < 8; row++) { unsigned char d = font_data[(int)c][row]; for (int col = 0; col < 8; col++) { if ((d >> (7 - col)) & 1) plot_pixel(x + col, y + row, color); } } }
+void draw_string(int x, int y, char* str, unsigned char color) { while (*str) { draw_char(x, y, *str, color); x += 8; str++; } }
 
-void draw_string(int x, int y, char* str, unsigned char color) {
-    while (*str) {
-        draw_char(x, y, *str, color);
-        x += 8;
-        str++;
-    }
+// Converts timer ticks to a millisecond string "INT.FRAC" using only integer math.
+void ticks_to_ms_string(unsigned int ticks, char* buffer) {
+    unsigned int integer_part = (ticks * 1000) / GBA_CLOCK_FREQ;
+    unsigned int fractional_part = (((ticks * 1000) % GBA_CLOCK_FREQ) * 100) / GBA_CLOCK_FREQ;
+    sprintf(buffer, "%u.%02u", integer_part, fractional_part);
 }
 
 // --- Clipping ---
@@ -179,6 +173,9 @@ int liang_barsky_clip(int* x0, int* y0, int* x1, int* y1) {
     return 1;
 }
 
+// --- Timer ---
+static inline unsigned int get_ticks() { return (REG_TM1CNT_L << 16) | REG_TM0CNT_L; }
+
 // --- Main Application ---
 int main() {
     PALETTE_MEM[0] = 0x0000; // Black
@@ -186,10 +183,11 @@ int main() {
     PALETTE_MEM[2] = 0x03E0; // Green for text
     REG_DISPCNT = MODE4 | BG2_ENABLE;
 
-    // Setup Timer
-    REG_TM0CNT_H = 0;
-    REG_TM0CNT_L = 0;
-    REG_TM0CNT_H = TIMER_ENABLE | TIMER_FREQ_1;
+    // Setup Timers 0 and 1 for 32-bit counting
+    REG_TM0CNT_H = 0; REG_TM1CNT_H = 0;
+    REG_TM0CNT_L = 0; REG_TM1CNT_L = 0;
+    REG_TM0CNT_H = TIMER_ENABLE;
+    REG_TM1CNT_H = TIMER_ENABLE | TIMER_CASCADE;
 
     generate_torus(50, 20);
 
@@ -198,16 +196,11 @@ int main() {
     unsigned char angle_x = 0, angle_y = 0, scale_angle = 0;
     Point2D projected_points[NUM_TORUS_VERTICES];
 
-    // Timing variables
-    int frame_count = 0;
-    int total_ticks = 0;
-    int fps = 0;
-    float logic_ms = 0, render_ms = 0, vsync_ms = 0;
-    const float ticks_to_ms = 1000.0f / (16777216.0f); // GBA CPU clock speed
+    unsigned int frame_count = 0, total_ticks = 0, fps = 0;
+    unsigned int logic_ticks = 0, render_ticks = 0, vsync_ticks = 0;
 
     while (1) {
-        REG_TM0CNT_L = 0; // Reset timer at start of frame
-        unsigned int start_tick = REG_TM0CNT_L;
+        unsigned int start_tick = get_ticks();
 
         // --- Input ---
         unsigned short current_keys = ~REG_KEYINPUT;
@@ -227,35 +220,23 @@ int main() {
         int num_vertices, num_edges;
 
         if (current_model == MODEL_CUBE) {
-            vertices = cube_vertices;
-            edges = cube_edges;
-            num_vertices = NUM_CUBE_VERTICES;
-            num_edges = NUM_CUBE_EDGES;
+            vertices = cube_vertices; edges = cube_edges;
+            num_vertices = NUM_CUBE_VERTICES; num_edges = NUM_CUBE_EDGES;
         } else {
-            vertices = torus_vertices;
-            edges = torus_edges;
-            num_vertices = NUM_TORUS_VERTICES;
-            num_edges = NUM_TORUS_EDGES;
+            vertices = torus_vertices; edges = torus_edges;
+            num_vertices = NUM_TORUS_VERTICES; num_edges = NUM_TORUS_EDGES;
         }
         
-        unsigned int logic_end_tick = REG_TM0CNT_L;
+        unsigned int logic_end_tick = get_ticks();
 
         // --- Render ---
         for (int i = 0; i < num_vertices; i++) {
             Point3D p = vertices[i];
-            p.x = (p.x * scale_val) >> FIXED_SHIFT;
-            p.y = (p.y * scale_val) >> FIXED_SHIFT;
-            p.z = (p.z * scale_val) >> FIXED_SHIFT;
-
+            p.x = (p.x * scale_val) >> FIXED_SHIFT; p.y = (p.y * scale_val) >> FIXED_SHIFT; p.z = (p.z * scale_val) >> FIXED_SHIFT;
             Point3D temp, rotated;
-            temp.x = (p.x * cos_y - p.z * sin_y) >> FIXED_SHIFT;
-            temp.z = (p.x * sin_y + p.z * cos_y) >> FIXED_SHIFT;
-            temp.y = p.y;
-            rotated.y = (temp.y * cos_x - temp.z * sin_x) >> FIXED_SHIFT;
-            rotated.z = (temp.y * sin_x + temp.z * cos_x) >> FIXED_SHIFT;
-            rotated.x = temp.x;
+            temp.x = (p.x * cos_y - p.z * sin_y) >> FIXED_SHIFT; temp.z = (p.x * sin_y + p.z * cos_y) >> FIXED_SHIFT; temp.y = p.y;
+            rotated.y = (temp.y * cos_x - temp.z * sin_x) >> FIXED_SHIFT; rotated.z = (temp.y * sin_x + temp.z * cos_x) >> FIXED_SHIFT; rotated.x = temp.x;
             rotated.z += Z_OFFSET;
-
             if (rotated.z > 0) {
                 int p_factor = (VIEWER_DISTANCE << FIXED_SHIFT) / rotated.z;
                 projected_points[i].x = ((rotated.x * p_factor) >> FIXED_SHIFT) + (SCREEN_WIDTH / 2);
@@ -276,34 +257,43 @@ int main() {
             else { if (liang_barsky_clip(&x0, &y0, &x1, &y1)) { draw_line(x0, y0, x1, y1, 1); } }
         }
         
-        unsigned int render_end_tick = REG_TM0CNT_L;
+        unsigned int render_end_tick = get_ticks();
 
         // --- VSync & Timing ---
         vsync();
-        unsigned int vsync_end_tick = REG_TM0CNT_L;
+        unsigned int frame_end_tick = get_ticks();
         
-        logic_ms = (logic_end_tick - start_tick) * ticks_to_ms;
-        render_ms = (render_end_tick - logic_end_tick) * ticks_to_ms;
-        vsync_ms = (vsync_end_tick - render_end_tick) * ticks_to_ms;
+        logic_ticks = logic_end_tick - start_tick;
+        render_ticks = render_end_tick - logic_end_tick;
+        vsync_ticks = frame_end_tick - render_end_tick;
 
         frame_count++;
-        total_ticks += vsync_end_tick - start_tick;
+        total_ticks += frame_end_tick - start_tick;
         if (frame_count >= 60) {
-            fps = (int)(60.0f / (total_ticks * ticks_to_ms));
+            if (total_ticks > 0) {
+                fps = (60 * GBA_CLOCK_FREQ) / total_ticks;
+            }
             frame_count = 0;
             total_ticks = 0;
         }
 
         // --- Draw HUD ---
         char buffer[32];
-        sprintf(buffer, "FPS: %d", fps);
+        sprintf(buffer, "FPS: %u", fps);
         draw_string(5, 5, buffer, 2);
-        sprintf(buffer, "LOGIC: %.2fms", logic_ms);
-        draw_string(5, 15, buffer, 2);
-        sprintf(buffer, "RENDER: %.2fms", render_ms);
-        draw_string(5, 25, buffer, 2);
-        sprintf(buffer, "VSYNC: %.2fms", vsync_ms);
-        draw_string(5, 35, buffer, 2);
+        
+        ticks_to_ms_string(logic_ticks, buffer);
+        char final_buffer[32];
+        sprintf(final_buffer, "LOGIC: %sms", buffer);
+        draw_string(5, 15, final_buffer, 2);
+
+        ticks_to_ms_string(render_ticks, buffer);
+        sprintf(final_buffer, "RENDER: %sms", buffer);
+        draw_string(5, 25, final_buffer, 2);
+
+        ticks_to_ms_string(vsync_ticks, buffer);
+        sprintf(final_buffer, "VSYNC: %sms", buffer);
+        draw_string(5, 35, final_buffer, 2);
 
         flip_page();
 
