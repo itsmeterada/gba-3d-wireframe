@@ -1,0 +1,37 @@
+# GBA Wireframe Cube
+
+This is a simple 3D graphics demo for the Nintendo Game Boy Advance (GBA). It renders a rotating and scaling wireframe cube using a software-based 3D pipeline.
+
+## Features
+
+- **3D Rendering:** A basic 3D pipeline running on the GBA CPU.
+- **Perspective Camera:** The scene is rendered with a perspective projection for a sense of depth.
+- **Rotation and Scaling:** The cube animates with continuous rotation on two axes and a pulsating scaling effect.
+- **Line Clipping:** Implements the Liang-Barsky algorithm to correctly clip the cube's edges against the screen boundaries.
+- **Double Buffering:** Uses GBA's Mode 4 with page flipping for smooth, flicker-free animation.
+- **Fixed-Point Math:** All calculations use fixed-point arithmetic for performance, avoiding slow floating-point operations.
+- **Pre-calculated Sine Table:** Rotations are performed efficiently using a sine lookup table.
+
+## Building from Source
+
+To build the project, you need to have the **devkitARM** toolchain from devkitPro installed and configured.
+
+Once the toolchain is set up, you can build the ROM by running:
+
+```bash
+make
+```
+
+This will create the GBA ROM file at `bin/my_game.gba`.
+
+To clean the build artifacts, run:
+
+```bash
+make clean
+```
+
+## Technical Details
+
+- **Display Mode:** GBA Mode 4 (240x160, 8-bit paletted color)
+- **Clipping Algorithm:** Liang-Barsky
+- **Line Drawing:** Bresenham's line algorithm
