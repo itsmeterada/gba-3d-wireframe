@@ -191,6 +191,9 @@ int main() {
             temp.x = (p.x * cos_y - p.z * sin_y) >> FIXED_SHIFT; temp.z = (p.x * sin_y + p.z * cos_y) >> FIXED_SHIFT; temp.y = p.y;
             rotated.y = (temp.y * cos_x - temp.z * sin_x) >> FIXED_SHIFT; rotated.z = (temp.y * sin_x + temp.z * cos_x) >> FIXED_SHIFT; rotated.x = temp.x;
             
+            // Apply aspect ratio correction for 3:2 screen (multiply X by 2/3)
+            rotated.x = (rotated.x * 2730) >> 12; // 2730 is (2/3) in 12-bit fixed point
+
             if (current_camera == CAMERA_PERSPECTIVE) {
                 rotated.z += Z_OFFSET;
                 if (rotated.z > 0) {
