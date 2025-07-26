@@ -161,7 +161,7 @@ int main() {
         clear_screen(0);
         short sin_x = sin_lut_12bit[angle_x], cos_x = sin_lut_12bit[(angle_x + 1024) & 4095];
         short sin_y = sin_lut_12bit[angle_y], cos_y = sin_lut_12bit[(angle_y + 1024) & 4095];
-        short scale_val = (1 << FIXED_SHIFT) + (sin_lut_12bit[anim_angle] >> 1);
+        short scale_val = (sin_lut_12bit[anim_angle] + 4096) >> 1;
 
         Point3D* vertices;
         unsigned short (*edges)[2];
