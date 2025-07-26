@@ -25,7 +25,7 @@ OBJECTS = $(patsubst $(SRCDIR)/%.c,$(BLDDIR)/%.o,$(SOURCES))
 
 # Flags
 CFLAGS = -I$(INCDIR) -mthumb -mthumb-interwork -mlong-calls
-LDFLAGS = -specs=gba.specs -mthumb -mthumb-interwork
+LDFLAGS = -specs=gba.specs -mthumb -mthumb-interwork -u _printf_float
 
 # Create bin directory if it doesn't exist
 $(shell mkdir -p $(BINDIR))
