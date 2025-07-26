@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "font.h"
+#include "sin_lut.h"
 
 // --- GBA Hardware Registers ---
 #define REG_DISPCNT *(volatile unsigned short *)0x04000000
@@ -41,7 +42,7 @@ volatile unsigned short* back_buffer = VRAM_PAGE0;
 #define KEY_A 0x0001
 
 // --- Math and Camera ---
-#define FIXED_SHIFT 8
+#define FIXED_SHIFT 12 // Use 12-bit fractional part for high-res LUT
 #define VIEWER_DISTANCE 256
 #define Z_OFFSET 120
 
@@ -70,18 +71,15 @@ unsigned short cube_edges[NUM_CUBE_EDGES][2] = {
 Point3D torus_vertices[NUM_TORUS_VERTICES];
 unsigned short torus_edges[NUM_TORUS_EDGES][2];
 
-// --- Sine Lookup Table ---
-const short sin_lut[256] = {0, 6, 13, 19, 25, 31, 38, 44, 50, 56, 62, 68, 74, 80, 86, 92, 98, 103, 109, 115, 120, 126, 131, 136, 142, 147, 152, 157, 162, 167, 171, 176, 180, 185, 189, 193, 197, 201, 205, 209, 213, 216, 220, 223, 227, 230, 233, 236, 239, 241, 244, 246, 248, 250, 252, 254, 255, 256, 256, 256, 256, 255, 254, 252, 250, 248, 246, 244, 241, 239, 236, 233, 230, 227, 223, 220, 216, 213, 209, 205, 201, 197, 193, 189, 185, 180, 176, 171, 167, 162, 157, 152, 147, 142, 136, 131, 126, 120, 115, 109, 103, 98, 92, 86, 80, 74, 68, 62, 56, 50, 44, 38, 31, 25, 19, 13, 6, 0, -6, -13, -19, -25, -31, -38, -44, -50, -56, -62, -68, -74, -80, -86, -92, -98, -103, -109, -115, -120, -126, -131, -136, -142, -147, -152, -157, -162, -167, -171, -176, -180, -185, -189, -193, -197, -201, -205, -209, -213, -216, -220, -223, -227, -230, -233, -236, -239, -241, -244, -246, -248, -250, -252, -254, -255, -256, -256, -256, -256, -255, -254, -252, -250, -248, -246, -244, -241, 239, -236, -233, -230, -227, -223, -220, -216, -213, -209, -205, -201, -197, -193, -189, -185, -180, -176, -171, -167, -162, -157, -152, -147, -142, -136, -131, -126, -120, -115, -109, -103, -98, -92, -86, -80, -74, -68, -62, -56, -50, -44, -38, -31, -25, -19, -13, -6};
-
 // --- Model Generation ---
 void generate_torus(int major_radius, int minor_radius) {
     int vertex_index = 0;
     for (int i = 0; i < NUM_MAJOR_SEGMENTS; i++) {
-        unsigned char u_angle = (i * 256) / NUM_MAJOR_SEGMENTS;
-        short cos_u = sin_lut[(u_angle + 64) & 0xFF], sin_u = sin_lut[u_angle];
+        unsigned int u_angle = (i * 4096) / NUM_MAJOR_SEGMENTS;
+        short cos_u = sin_lut_12bit[(u_angle + 1024) & 4095], sin_u = sin_lut_12bit[u_angle];
         for (int j = 0; j < NUM_MINOR_SEGMENTS; j++) {
-            unsigned char v_angle = (j * 256) / NUM_MINOR_SEGMENTS;
-            short cos_v = sin_lut[(v_angle + 64) & 0xFF], sin_v = sin_lut[v_angle];
+            unsigned int v_angle = (j * 4096) / NUM_MINOR_SEGMENTS;
+            short cos_v = sin_lut_12bit[(v_angle + 1024) & 4095], sin_v = sin_lut_12bit[v_angle];
             int R_plus_r_cos_v = major_radius + ((minor_radius * cos_v) >> FIXED_SHIFT);
             torus_vertices[vertex_index].x = (R_plus_r_cos_v * cos_u) >> FIXED_SHIFT;
             torus_vertices[vertex_index].y = (R_plus_r_cos_v * sin_u) >> FIXED_SHIFT;
@@ -115,13 +113,7 @@ void draw_line(int x0, int y0, int x1, int y1, unsigned char color) { int dx = a
 // --- Text Functions ---
 void draw_char(int x, int y, char c, unsigned char color) { for (int row = 0; row < 8; row++) { unsigned char d = font_data[(int)c][row]; for (int col = 0; col < 8; col++) { if ((d >> (7 - col)) & 1) plot_pixel(x + col, y + row, color); } } }
 void draw_string(int x, int y, char* str, unsigned char color) { while (*str) { draw_char(x, y, *str, color); x += 8; str++; } }
-
-// Converts timer ticks to a millisecond string "INT.FRAC" using only integer math.
-void ticks_to_ms_string(unsigned int ticks, char* buffer) {
-    unsigned int integer_part = (ticks * 1000) / GBA_CLOCK_FREQ;
-    unsigned int fractional_part = (((ticks * 1000) % GBA_CLOCK_FREQ) * 100) / GBA_CLOCK_FREQ;
-    sprintf(buffer, "%u.%02u", integer_part, fractional_part);
-}
+void ticks_to_ms_string(unsigned int ticks, char* buffer) { unsigned int i = (ticks * 1000) / GBA_CLOCK_FREQ; unsigned int f = (((ticks * 1000) % GBA_CLOCK_FREQ) * 100) / GBA_CLOCK_FREQ; sprintf(buffer, "%u.%02u", i, f); }
 
 // --- Clipping ---
 #define CLIP_INSIDE 0
@@ -129,63 +121,19 @@ void ticks_to_ms_string(unsigned int ticks, char* buffer) {
 #define CLIP_RIGHT  2
 #define CLIP_BOTTOM 4
 #define CLIP_TOP    8
-
-int compute_outcode(int x, int y) {
-    int code = CLIP_INSIDE;
-    if (x < SCREEN_X_MIN) code |= CLIP_LEFT;
-    else if (x > SCREEN_X_MAX) code |= CLIP_RIGHT;
-    if (y < SCREEN_Y_MIN) code |= CLIP_BOTTOM;
-    else if (y > SCREEN_Y_MAX) code |= CLIP_TOP;
-    return code;
-}
-
-int clip_test(long p, long q, long* t0, long* t1) {
-    long r;
-    if (p == 0 && q < 0) return 0;
-    if (p != 0) {
-        r = (q << FIXED_SHIFT) / p;
-        if (p < 0) {
-            if (r > *t1) return 0;
-            if (r > *t0) *t0 = r;
-        } else {
-            if (r < *t0) return 0;
-            if (r < *t1) *t1 = r;
-        }
-    }
-    return 1;
-}
-
-int liang_barsky_clip(int* x0, int* y0, int* x1, int* y1) {
-    long dx = *x1 - *x0, dy = *y1 - *y0;
-    long t0 = 0, t1 = 1 << FIXED_SHIFT;
-    if (!clip_test(-dx, *x0 - SCREEN_X_MIN, &t0, &t1)) return 0;
-    if (!clip_test(dx, SCREEN_X_MAX - *x0, &t0, &t1)) return 0;
-    if (!clip_test(-dy, *y0 - SCREEN_Y_MIN, &t0, &t1)) return 0;
-    if (!clip_test(dy, SCREEN_Y_MAX - *y0, &t0, &t1)) return 0;
-    if (t1 < (1 << FIXED_SHIFT)) {
-        *x1 = *x0 + ((t1 * dx) >> FIXED_SHIFT);
-        *y1 = *y0 + ((t1 * dy) >> FIXED_SHIFT);
-    }
-    if (t0 > 0) {
-        *x0 = *x0 + ((t0 * dx) >> FIXED_SHIFT);
-        *y0 = *y0 + ((t0 * dy) >> FIXED_SHIFT);
-    }
-    return 1;
-}
+int compute_outcode(int x, int y) { int code = CLIP_INSIDE; if (x < SCREEN_X_MIN) code |= CLIP_LEFT; else if (x > SCREEN_X_MAX) code |= CLIP_RIGHT; if (y < SCREEN_Y_MIN) code |= CLIP_BOTTOM; else if (y > SCREEN_Y_MAX) code |= CLIP_TOP; return code; }
+int clip_test(long p, long q, long* t0, long* t1) { long r; if (p == 0 && q < 0) return 0; if (p != 0) { r = (q << FIXED_SHIFT) / p; if (p < 0) { if (r > *t1) return 0; if (r > *t0) *t0 = r; } else { if (r < *t0) return 0; if (r < *t1) *t1 = r; } } return 1; }
+int liang_barsky_clip(int* x0, int* y0, int* x1, int* y1) { long dx = *x1 - *x0, dy = *y1 - *y0; long t0 = 0, t1 = 1 << FIXED_SHIFT; if (!clip_test(-dx, *x0 - SCREEN_X_MIN, &t0, &t1)) return 0; if (!clip_test(dx, SCREEN_X_MAX - *x0, &t0, &t1)) return 0; if (!clip_test(-dy, *y0 - SCREEN_Y_MIN, &t0, &t1)) return 0; if (!clip_test(dy, SCREEN_Y_MAX - *y0, &t0, &t1)) return 0; if (t1 < (1 << FIXED_SHIFT)) { *x1 = *x0 + ((t1 * dx) >> FIXED_SHIFT); *y1 = *y0 + ((t1 * dy) >> FIXED_SHIFT); } if (t0 > 0) { *x0 = *x0 + ((t0 * dx) >> FIXED_SHIFT); *y0 = *y0 + ((t0 * dy) >> FIXED_SHIFT); } return 1; }
 
 // --- Timer ---
 static inline unsigned int get_ticks() { return (REG_TM1CNT_L << 16) | REG_TM0CNT_L; }
 
 // --- Main Application ---
 int main() {
-    PALETTE_MEM[0] = 0x0000; // Black
-    PALETTE_MEM[1] = 0x7FFF; // White
-    PALETTE_MEM[2] = 0x03E0; // Green for text
+    PALETTE_MEM[0] = 0x0000; PALETTE_MEM[1] = 0x7FFF; PALETTE_MEM[2] = 0x03E0;
     REG_DISPCNT = MODE4 | BG2_ENABLE;
 
-    // Setup Timers 0 and 1 for 32-bit counting
-    REG_TM0CNT_H = 0; REG_TM1CNT_H = 0;
-    REG_TM0CNT_L = 0; REG_TM1CNT_L = 0;
+    REG_TM0CNT_H = 0; REG_TM1CNT_H = 0; REG_TM0CNT_L = 0; REG_TM1CNT_L = 0;
     REG_TM0CNT_H = TIMER_ENABLE;
     REG_TM1CNT_H = TIMER_ENABLE | TIMER_CASCADE;
 
@@ -193,7 +141,7 @@ int main() {
 
     enum ModelType current_model = MODEL_CUBE;
     unsigned short last_keys = 0;
-    unsigned char angle_x = 0, angle_y = 0, scale_angle = 0;
+    unsigned int angle_x = 0, angle_y = 0, anim_angle = 0;
     Point2D projected_points[NUM_TORUS_VERTICES];
 
     unsigned int frame_count = 0, total_ticks = 0, fps = 0;
@@ -211,9 +159,9 @@ int main() {
 
         // --- Logic ---
         clear_screen(0);
-        short sin_x = sin_lut[angle_x], cos_x = sin_lut[(angle_x + 64) & 0xFF];
-        short sin_y = sin_lut[angle_y], cos_y = sin_lut[(angle_y + 64) & 0xFF];
-        short scale_val = 128 + (sin_lut[scale_angle] >> 1);
+        short sin_x = sin_lut_12bit[angle_x], cos_x = sin_lut_12bit[(angle_x + 1024) & 4095];
+        short sin_y = sin_lut_12bit[angle_y], cos_y = sin_lut_12bit[(angle_y + 1024) & 4095];
+        short scale_val = (1 << FIXED_SHIFT) + (sin_lut_12bit[anim_angle] >> 1);
 
         Point3D* vertices;
         unsigned short (*edges)[2];
@@ -270,36 +218,24 @@ int main() {
         frame_count++;
         total_ticks += frame_end_tick - start_tick;
         if (frame_count >= 60) {
-            if (total_ticks > 0) {
-                fps = (60 * GBA_CLOCK_FREQ) / total_ticks;
-            }
-            frame_count = 0;
-            total_ticks = 0;
+            if (total_ticks > 0) { fps = (60 * GBA_CLOCK_FREQ) / total_ticks; }
+            frame_count = 0; total_ticks = 0;
         }
 
         // --- Draw HUD ---
-        char buffer[32];
+        char buffer[32], final_buffer[32];
         sprintf(buffer, "FPS: %u", fps);
         draw_string(5, 5, buffer, 2);
-        
-        ticks_to_ms_string(logic_ticks, buffer);
-        char final_buffer[32];
-        sprintf(final_buffer, "LOGIC: %sms", buffer);
-        draw_string(5, 15, final_buffer, 2);
-
-        ticks_to_ms_string(render_ticks, buffer);
-        sprintf(final_buffer, "RENDER: %sms", buffer);
-        draw_string(5, 25, final_buffer, 2);
-
-        ticks_to_ms_string(vsync_ticks, buffer);
-        sprintf(final_buffer, "VSYNC: %sms", buffer);
-        draw_string(5, 35, final_buffer, 2);
+        ticks_to_ms_string(logic_ticks, buffer); sprintf(final_buffer, "LOGIC: %sms", buffer); draw_string(5, 15, final_buffer, 2);
+        ticks_to_ms_string(render_ticks, buffer); sprintf(final_buffer, "RENDER: %sms", buffer); draw_string(5, 25, final_buffer, 2);
+        ticks_to_ms_string(vsync_ticks, buffer); sprintf(final_buffer, "VSYNC: %sms", buffer); draw_string(5, 35, final_buffer, 2);
 
         flip_page();
 
-        angle_x += 2;
-        angle_y++;
-        scale_angle++;
+        // --- Update angles for next frame ---
+        angle_x = (angle_x + 32) & 4095;
+        angle_y = (angle_y + 16) & 4095;
+        anim_angle = (anim_angle + 16) & 4095;
     }
     return 0;
 }
