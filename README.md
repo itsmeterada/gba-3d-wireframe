@@ -1,16 +1,19 @@
-# GBA Wireframe Cube
+# GBA Wireframe Torus
 
-This is a simple 3D graphics demo for the Nintendo Game Boy Advance (GBA). It renders a rotating and scaling wireframe cube using a software-based 3D pipeline.
+This is a simple 3D graphics demo for the Nintendo Game Boy Advance (GBA). It renders a rotating and scaling wireframe torus using a software-based 3D pipeline.
+
+The torus model is generated programmatically at runtime.
 
 ## Features
 
+- **Procedural Model Generation:** The torus mesh (vertices and edges) is generated using parametric equations.
 - **3D Rendering:** A basic 3D pipeline running on the GBA CPU.
 - **Perspective Camera:** The scene is rendered with a perspective projection for a sense of depth.
-- **Rotation and Scaling:** The cube animates with continuous rotation on two axes and a pulsating scaling effect.
-- **Line Clipping:** Implements the Liang-Barsky algorithm to correctly clip the cube's edges against the screen boundaries.
+- **Rotation and Scaling:** The torus animates with continuous rotation on two axes and a pulsating scaling effect.
+- **Line Clipping:** Implements the Liang-Barsky algorithm to correctly clip the model's edges against the screen boundaries.
 - **Double Buffering:** Uses GBA's Mode 4 with page flipping for smooth, flicker-free animation.
 - **Fixed-Point Math:** All calculations use fixed-point arithmetic for performance, avoiding slow floating-point operations.
-- **Pre-calculated Sine Table:** Rotations are performed efficiently using a sine lookup table.
+- **Pre-calculated Sine Table:** Rotations and model generation are performed efficiently using a sine lookup table.
 
 ## Building from Source
 
