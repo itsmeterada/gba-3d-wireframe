@@ -102,6 +102,21 @@ void clear_screen(unsigned char color) { unsigned short v = (color << 8) | color
 void draw_line(int x0, int y0, int x1, int y1, unsigned char color) { int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1; int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1; int err = dx + dy, e2; for (;;) { plot_pixel(x0, y0, color); if (x0 == x1 && y0 == y1) break; e2 = 2 * err; if (e2 >= dy) { err += dy; x0 += sx; } if (e2 <= dx) { err += dx; y0 += sy; } } }
 
 // --- Clipping ---
+#define CLIP_INSIDE 0
+#define CLIP_LEFT   1
+#define CLIP_RIGHT  2
+#define CLIP_BOTTOM 4
+#define CLIP_TOP    8
+
+int compute_outcode(int x, int y) {
+    int code = CLIP_INSIDE;
+    if (x < SCREEN_X_MIN) code |= CLIP_LEFT;
+    else if (x > SCREEN_X_MAX) code |= CLIP_RIGHT;
+    if (y < SCREEN_Y_MIN) code |= CLIP_BOTTOM;
+    else if (y > SCREEN_Y_MAX) code |= CLIP_TOP;
+    return code;
+}
+
 int clip_test(long p, long q, long* t0, long* t1) { long r; if (p == 0 && q < 0) return 0; if (p != 0) { r = (q << FIXED_SHIFT) / p; if (p < 0) { if (r > *t1) return 0; if (r > *t0) *t0 = r; } else { if (r < *t0) return 0; if (r < *t1) *t1 = r; } } return 1; }
 int liang_barsky_clip(int* x0, int* y0, int* x1, int* y1) { long dx = *x1 - *x0, dy = *y1 - *y0; long t0 = 0, t1 = 1 << FIXED_SHIFT; if (!clip_test(-dx, *x0 - SCREEN_X_MIN, &t0, &t1)) return 0; if (!clip_test(dx, SCREEN_X_MAX - *x0, &t0, &t1)) return 0; if (!clip_test(-dy, *y0 - SCREEN_Y_MIN, &t0, &t1)) return 0; if (!clip_test(dy, SCREEN_Y_MAX - *y0, &t0, &t1)) return 0; if (t1 < (1 << FIXED_SHIFT)) { *x1 = *x0 + ((t1 * dx) >> FIXED_SHIFT); *y1 = *y0 + ((t1 * dy) >> FIXED_SHIFT); } if (t0 > 0) { *x0 = *x0 + ((t0 * dx) >> FIXED_SHIFT); *y0 = *y0 + ((t0 * dy) >> FIXED_SHIFT); } return 1; }
 
@@ -116,7 +131,7 @@ int main() {
     enum ModelType current_model = MODEL_CUBE;
     unsigned short last_keys = 0;
     unsigned char angle_x = 0, angle_y = 0, scale_angle = 0;
-    Point2D projected_points[NUM_TORUS_VERTICES]; // Use largest possible size
+    Point2D projected_points[NUM_TORUS_VERTICES];
 
     while (1) {
         // --- Input ---
@@ -176,10 +191,21 @@ int main() {
         for (int i = 0; i < num_edges; i++) {
             int p1_idx = edges[i][0], p2_idx = edges[i][1];
             if (projected_points[p1_idx].x == -10000 || projected_points[p2_idx].x == -10000) continue;
+            
             int x0 = projected_points[p1_idx].x, y0 = projected_points[p1_idx].y;
             int x1 = projected_points[p2_idx].x, y1 = projected_points[p2_idx].y;
-            if (liang_barsky_clip(&x0, &y0, &x1, &y1)) {
-                draw_line(x0, y0, x1, y1, 1);
+
+            int outcode0 = compute_outcode(x0, y0);
+            int outcode1 = compute_outcode(x1, y1);
+
+            if ((outcode0 | outcode1) == 0) {
+                draw_line(x0, y0, x1, y1, 1); // Trivial accept
+            } else if ((outcode0 & outcode1) != 0) {
+                continue; // Trivial reject
+            } else {
+                if (liang_barsky_clip(&x0, &y0, &x1, &y1)) { // Clip
+                    draw_line(x0, y0, x1, y1, 1);
+                }
             }
         }
 
