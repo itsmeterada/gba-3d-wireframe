@@ -31,44 +31,71 @@ volatile unsigned short* back_buffer = VRAM_PAGE0;
 #define FIXED_SHIFT 8
 
 // Perspective camera settings
-#define VIEWER_DISTANCE 256 // Distance from viewer to projection plane (acts as focal length)
-#define Z_OFFSET 100        // Distance to push the cube away from the camera
+#define VIEWER_DISTANCE 256
+#define Z_OFFSET 120
 
 // 3D/2D point structures
 typedef struct { int x, y, z; } Point3D;
 typedef struct { int x, y; } Point2D;
+
+// --- Torus Model Data ---
+#define NUM_MAJOR_SEGMENTS 16
+#define NUM_MINOR_SEGMENTS 8
+#define NUM_VERTICES (NUM_MAJOR_SEGMENTS * NUM_MINOR_SEGMENTS)
+#define NUM_EDGES (NUM_MAJOR_SEGMENTS * NUM_MINOR_SEGMENTS * 2)
+
+Point3D torus_vertices[NUM_VERTICES];
+unsigned short torus_edges[NUM_EDGES][2];
 
 // Pre-calculated sine lookup table
 const short sin_lut[256] = {
     0, 6, 13, 19, 25, 31, 38, 44, 50, 56, 62, 68, 74, 80, 86, 92, 98, 103, 109, 115, 120, 126, 131, 136, 142, 147, 152, 157, 162, 167, 171, 176, 180, 185, 189, 193, 197, 201, 205, 209, 213, 216, 220, 223, 227, 230, 233, 236, 239, 241, 244, 246, 248, 250, 252, 254, 255, 256, 256, 256, 256, 255, 254, 252, 250, 248, 246, 244, 241, 239, 236, 233, 230, 227, 223, 220, 216, 213, 209, 205, 201, 197, 193, 189, 185, 180, 176, 171, 167, 162, 157, 152, 147, 142, 136, 131, 126, 120, 115, 109, 103, 98, 92, 86, 80, 74, 68, 62, 56, 50, 44, 38, 31, 25, 19, 13, 6, 0, -6, -13, -19, -25, -31, -38, -44, -50, -56, -62, -68, -74, -80, -86, -92, -98, -103, -109, -115, -120, -126, -131, -136, -142, -147, -152, -157, -162, -167, -171, -176, -180, -185, -189, -193, -197, -201, -205, -209, -213, -216, -220, -223, -227, -230, -233, -236, -239, -241, -244, -246, -248, -250, -252, -254, -255, -256, -256, -256, -256, -255, -254, -252, -250, -248, -246, -244, -241, 239, -236, -233, -230, -227, -223, -220, -216, -213, -209, -205, -201, -197, -193, -189, -185, -180, -176, -171, -167, -162, -157, -152, -147, -142, -136, -131, -126, -120, -115, -109, -103, -98, -92, -86, -80, -74, -68, -62, -56, -50, -44, -38, -31, -25, -19, -13, -6
 };
 
-// Cube model data
-Point3D cube_vertices[8] = {
-    {-30, -30, -30}, {30, -30, -30}, {30, 30, -30}, {-30, 30, -30},
-    {-30, -30,  30}, {30, -30,  30}, {30, 30,  30}, {-30, 30,  30}
-};
+// --- Model Generation ---
+void generate_torus(int major_radius, int minor_radius) {
+    int vertex_index = 0;
+    for (int i = 0; i < NUM_MAJOR_SEGMENTS; i++) {
+        unsigned char u_angle = (i * 256) / NUM_MAJOR_SEGMENTS;
+        short cos_u = sin_lut[(u_angle + 64) & 0xFF];
+        short sin_u = sin_lut[u_angle];
 
-unsigned char cube_edges[12][2] = {
-    {0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6}, {6, 7}, {7, 4},
-    {0, 4}, {1, 5}, {2, 6}, {3, 7}
-};
+        for (int j = 0; j < NUM_MINOR_SEGMENTS; j++) {
+            unsigned char v_angle = (j * 256) / NUM_MINOR_SEGMENTS;
+            short cos_v = sin_lut[(v_angle + 64) & 0xFF];
+            short sin_v = sin_lut[v_angle];
 
-// --- Graphics Functions ---
-void flip_page() {
-    if (back_buffer == VRAM_PAGE0) {
-        REG_DISPCNT &= ~DISP_BACKBUFFER;
-        back_buffer = VRAM_PAGE1;
-    } else {
-        REG_DISPCNT |= DISP_BACKBUFFER;
-        back_buffer = VRAM_PAGE0;
+            int R_plus_r_cos_v = major_radius + ((minor_radius * cos_v) >> FIXED_SHIFT);
+            
+            torus_vertices[vertex_index].x = (R_plus_r_cos_v * cos_u) >> FIXED_SHIFT;
+            torus_vertices[vertex_index].y = (R_plus_r_cos_v * sin_u) >> FIXED_SHIFT;
+            torus_vertices[vertex_index].z = (minor_radius * sin_v) >> FIXED_SHIFT;
+            
+            vertex_index++;
+        }
+    }
+
+    int edge_index = 0;
+    for (int i = 0; i < NUM_MAJOR_SEGMENTS; i++) {
+        for (int j = 0; j < NUM_MINOR_SEGMENTS; j++) {
+            int current_v = i * NUM_MINOR_SEGMENTS + j;
+            int next_major_v = ((i + 1) % NUM_MAJOR_SEGMENTS) * NUM_MINOR_SEGMENTS + j;
+            int next_minor_v = i * NUM_MINOR_SEGMENTS + ((j + 1) % NUM_MINOR_SEGMENTS);
+
+            torus_edges[edge_index][0] = current_v;
+            torus_edges[edge_index][1] = next_major_v;
+            edge_index++;
+
+            torus_edges[edge_index][0] = current_v;
+            torus_edges[edge_index][1] = next_minor_v;
+            edge_index++;
+        }
     }
 }
 
-void vsync() {
-    while (REG_VCOUNT >= 160);
-    while (REG_VCOUNT < 160);
-}
+// --- Graphics Functions ---
+void flip_page() { if (back_buffer == VRAM_PAGE0) { REG_DISPCNT &= ~DISP_BACKBUFFER; back_buffer = VRAM_PAGE1; } else { REG_DISPCNT |= DISP_BACKBUFFER; back_buffer = VRAM_PAGE0; } }
+void vsync() { while (REG_VCOUNT >= 160); while (REG_VCOUNT < 160); }
 
 void plot_pixel(int x, int y, unsigned char color_index) {
     if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT) return;
@@ -101,24 +128,17 @@ void draw_line(int x0, int y0, int x1, int y1, unsigned char color) {
 int clip_test(long p, long q, long* t0, long* t1) {
     long r;
     if (p == 0 && q < 0) return 0;
-
     if (p != 0) {
         r = (q << FIXED_SHIFT) / p;
-        if (p < 0) {
-            if (r > *t1) return 0;
-            if (r > *t0) *t0 = r;
-        } else { // p > 0
-            if (r < *t0) return 0;
-            if (r < *t1) *t1 = r;
-        }
+        if (p < 0) { if (r > *t1) return 0; if (r > *t0) *t0 = r; } 
+        else { if (r < *t0) return 0; if (r < *t1) *t1 = r; }
     }
     return 1;
 }
 
 int liang_barsky_clip(int* x0_ptr, int* y0_ptr, int* x1_ptr, int* y1_ptr) {
     int x0 = *x0_ptr, y0 = *y0_ptr, x1 = *x1_ptr, y1 = *y1_ptr;
-    long dx = x1 - x0;
-    long dy = y1 - y0;
+    long dx = x1 - x0, dy = y1 - y0;
     long t0 = 0, t1 = 1 << FIXED_SHIFT;
 
     if (!clip_test(-dx, x0 - SCREEN_X_MIN, &t0, &t1)) return 0;
@@ -126,14 +146,8 @@ int liang_barsky_clip(int* x0_ptr, int* y0_ptr, int* x1_ptr, int* y1_ptr) {
     if (!clip_test(-dy, y0 - SCREEN_Y_MIN, &t0, &t1)) return 0;
     if (!clip_test(dy, SCREEN_Y_MAX - y0, &t0, &t1)) return 0;
 
-    if (t1 < (1 << FIXED_SHIFT)) {
-        *x1_ptr = x0 + ((t1 * dx) >> FIXED_SHIFT);
-        *y1_ptr = y0 + ((t1 * dy) >> FIXED_SHIFT);
-    }
-    if (t0 > 0) {
-        *x0_ptr = x0 + ((t0 * dx) >> FIXED_SHIFT);
-        *y0_ptr = y0 + ((t0 * dy) >> FIXED_SHIFT);
-    }
+    if (t1 < (1 << FIXED_SHIFT)) { *x1_ptr = x0 + ((t1 * dx) >> FIXED_SHIFT); *y1_ptr = y0 + ((t1 * dy) >> FIXED_SHIFT); }
+    if (t0 > 0) { *x0_ptr = x0 + ((t0 * dx) >> FIXED_SHIFT); *y0_ptr = y0 + ((t0 * dy) >> FIXED_SHIFT); }
     return 1;
 }
 
@@ -143,8 +157,10 @@ int main() {
     PALETTE_MEM[1] = 0x7FFF; // White
     REG_DISPCNT = MODE4 | BG2_ENABLE;
 
+    generate_torus(50, 20); // Generate the torus model
+
     unsigned char angle_x = 0, angle_y = 0, scale_angle = 0;
-    Point2D projected_points[8];
+    Point2D projected_points[NUM_VERTICES];
 
     while (1) {
         clear_screen(0);
@@ -155,8 +171,8 @@ int main() {
         short cos_y = sin_lut[(angle_y + 64) & 0xFF];
         short scale_val = 128 + (sin_lut[scale_angle] >> 1);
 
-        for (int i = 0; i < 8; i++) {
-            Point3D p = cube_vertices[i];
+        for (int i = 0; i < NUM_VERTICES; i++) {
+            Point3D p = torus_vertices[i];
             p.x = (p.x * scale_val) >> FIXED_SHIFT;
             p.y = (p.y * scale_val) >> FIXED_SHIFT;
             p.z = (p.z * scale_val) >> FIXED_SHIFT;
@@ -177,13 +193,12 @@ int main() {
                 projected_points[i].y = ((rotated.y * perspective_factor) >> FIXED_SHIFT) + (SCREEN_HEIGHT / 2);
             } else {
                 projected_points[i].x = -10000;
-                projected_points[i].y = -10000;
             }
         }
 
-        for (int i = 0; i < 12; i++) {
-            int p1_idx = cube_edges[i][0];
-            int p2_idx = cube_edges[i][1];
+        for (int i = 0; i < NUM_EDGES; i++) {
+            int p1_idx = torus_edges[i][0];
+            int p2_idx = torus_edges[i][1];
             
             if (projected_points[p1_idx].x == -10000 || projected_points[p2_idx].x == -10000) {
                 continue;
