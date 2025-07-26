@@ -1,11 +1,19 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include "font.h"
 
 // --- GBA Hardware Registers ---
 #define REG_DISPCNT *(volatile unsigned short *)0x04000000
 #define PALETTE_MEM ((volatile unsigned short *)0x05000000)
 #define REG_VCOUNT *(volatile unsigned short *)0x04000006
 #define REG_KEYINPUT *(volatile unsigned short *)0x04000130
+
+// Timer Registers
+#define REG_TM0CNT_L *(volatile unsigned short*)0x4000100
+#define REG_TM0CNT_H *(volatile unsigned short*)0x4000102
+#define TIMER_ENABLE 0x0080
+#define TIMER_FREQ_1 0x0000 // F_CPU
 
 // --- Display Constants ---
 #define SCREEN_WIDTH 240
@@ -101,6 +109,26 @@ void plot_pixel(int x, int y, unsigned char color) { if (x < 0 || x >= SCREEN_WI
 void clear_screen(unsigned char color) { unsigned short v = (color << 8) | color; memset((void*)back_buffer, v, VRAM_PAGE_SIZE); }
 void draw_line(int x0, int y0, int x1, int y1, unsigned char color) { int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1; int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1; int err = dx + dy, e2; for (;;) { plot_pixel(x0, y0, color); if (x0 == x1 && y0 == y1) break; e2 = 2 * err; if (e2 >= dy) { err += dy; x0 += sx; } if (e2 <= dx) { err += dx; y0 += sy; } } }
 
+// --- Text Functions ---
+void draw_char(int x, int y, char c, unsigned char color) {
+    for (int row = 0; row < 8; row++) {
+        unsigned char row_data = font_data[(int)c][row];
+        for (int col = 0; col < 8; col++) {
+            if ((row_data >> (7 - col)) & 1) {
+                plot_pixel(x + col, y + row, color);
+            }
+        }
+    }
+}
+
+void draw_string(int x, int y, char* str, unsigned char color) {
+    while (*str) {
+        draw_char(x, y, *str, color);
+        x += 8;
+        str++;
+    }
+}
+
 // --- Clipping ---
 #define CLIP_INSIDE 0
 #define CLIP_LEFT   1
@@ -117,14 +145,51 @@ int compute_outcode(int x, int y) {
     return code;
 }
 
-int clip_test(long p, long q, long* t0, long* t1) { long r; if (p == 0 && q < 0) return 0; if (p != 0) { r = (q << FIXED_SHIFT) / p; if (p < 0) { if (r > *t1) return 0; if (r > *t0) *t0 = r; } else { if (r < *t0) return 0; if (r < *t1) *t1 = r; } } return 1; }
-int liang_barsky_clip(int* x0, int* y0, int* x1, int* y1) { long dx = *x1 - *x0, dy = *y1 - *y0; long t0 = 0, t1 = 1 << FIXED_SHIFT; if (!clip_test(-dx, *x0 - SCREEN_X_MIN, &t0, &t1)) return 0; if (!clip_test(dx, SCREEN_X_MAX - *x0, &t0, &t1)) return 0; if (!clip_test(-dy, *y0 - SCREEN_Y_MIN, &t0, &t1)) return 0; if (!clip_test(dy, SCREEN_Y_MAX - *y0, &t0, &t1)) return 0; if (t1 < (1 << FIXED_SHIFT)) { *x1 = *x0 + ((t1 * dx) >> FIXED_SHIFT); *y1 = *y0 + ((t1 * dy) >> FIXED_SHIFT); } if (t0 > 0) { *x0 = *x0 + ((t0 * dx) >> FIXED_SHIFT); *y0 = *y0 + ((t0 * dy) >> FIXED_SHIFT); } return 1; }
+int clip_test(long p, long q, long* t0, long* t1) {
+    long r;
+    if (p == 0 && q < 0) return 0;
+    if (p != 0) {
+        r = (q << FIXED_SHIFT) / p;
+        if (p < 0) {
+            if (r > *t1) return 0;
+            if (r > *t0) *t0 = r;
+        } else {
+            if (r < *t0) return 0;
+            if (r < *t1) *t1 = r;
+        }
+    }
+    return 1;
+}
+
+int liang_barsky_clip(int* x0, int* y0, int* x1, int* y1) {
+    long dx = *x1 - *x0, dy = *y1 - *y0;
+    long t0 = 0, t1 = 1 << FIXED_SHIFT;
+    if (!clip_test(-dx, *x0 - SCREEN_X_MIN, &t0, &t1)) return 0;
+    if (!clip_test(dx, SCREEN_X_MAX - *x0, &t0, &t1)) return 0;
+    if (!clip_test(-dy, *y0 - SCREEN_Y_MIN, &t0, &t1)) return 0;
+    if (!clip_test(dy, SCREEN_Y_MAX - *y0, &t0, &t1)) return 0;
+    if (t1 < (1 << FIXED_SHIFT)) {
+        *x1 = *x0 + ((t1 * dx) >> FIXED_SHIFT);
+        *y1 = *y0 + ((t1 * dy) >> FIXED_SHIFT);
+    }
+    if (t0 > 0) {
+        *x0 = *x0 + ((t0 * dx) >> FIXED_SHIFT);
+        *y0 = *y0 + ((t0 * dy) >> FIXED_SHIFT);
+    }
+    return 1;
+}
 
 // --- Main Application ---
 int main() {
-    PALETTE_MEM[0] = 0x0000;
-    PALETTE_MEM[1] = 0x7FFF;
+    PALETTE_MEM[0] = 0x0000; // Black
+    PALETTE_MEM[1] = 0x7FFF; // White
+    PALETTE_MEM[2] = 0x03E0; // Green for text
     REG_DISPCNT = MODE4 | BG2_ENABLE;
+
+    // Setup Timer
+    REG_TM0CNT_H = 0;
+    REG_TM0CNT_L = 0;
+    REG_TM0CNT_H = TIMER_ENABLE | TIMER_FREQ_1;
 
     generate_torus(50, 20);
 
@@ -133,7 +198,17 @@ int main() {
     unsigned char angle_x = 0, angle_y = 0, scale_angle = 0;
     Point2D projected_points[NUM_TORUS_VERTICES];
 
+    // Timing variables
+    int frame_count = 0;
+    int total_ticks = 0;
+    int fps = 0;
+    float logic_ms = 0, render_ms = 0, vsync_ms = 0;
+    const float ticks_to_ms = 1000.0f / (16777216.0f); // GBA CPU clock speed
+
     while (1) {
+        REG_TM0CNT_L = 0; // Reset timer at start of frame
+        unsigned int start_tick = REG_TM0CNT_L;
+
         // --- Input ---
         unsigned short current_keys = ~REG_KEYINPUT;
         if ((current_keys & KEY_A) && !(last_keys & KEY_A)) {
@@ -162,6 +237,8 @@ int main() {
             num_vertices = NUM_TORUS_VERTICES;
             num_edges = NUM_TORUS_EDGES;
         }
+        
+        unsigned int logic_end_tick = REG_TM0CNT_L;
 
         // --- Render ---
         for (int i = 0; i < num_vertices; i++) {
@@ -191,25 +268,43 @@ int main() {
         for (int i = 0; i < num_edges; i++) {
             int p1_idx = edges[i][0], p2_idx = edges[i][1];
             if (projected_points[p1_idx].x == -10000 || projected_points[p2_idx].x == -10000) continue;
-            
             int x0 = projected_points[p1_idx].x, y0 = projected_points[p1_idx].y;
             int x1 = projected_points[p2_idx].x, y1 = projected_points[p2_idx].y;
+            int outcode0 = compute_outcode(x0, y0), outcode1 = compute_outcode(x1, y1);
+            if ((outcode0 | outcode1) == 0) { draw_line(x0, y0, x1, y1, 1); } 
+            else if ((outcode0 & outcode1) != 0) { continue; } 
+            else { if (liang_barsky_clip(&x0, &y0, &x1, &y1)) { draw_line(x0, y0, x1, y1, 1); } }
+        }
+        
+        unsigned int render_end_tick = REG_TM0CNT_L;
 
-            int outcode0 = compute_outcode(x0, y0);
-            int outcode1 = compute_outcode(x1, y1);
+        // --- VSync & Timing ---
+        vsync();
+        unsigned int vsync_end_tick = REG_TM0CNT_L;
+        
+        logic_ms = (logic_end_tick - start_tick) * ticks_to_ms;
+        render_ms = (render_end_tick - logic_end_tick) * ticks_to_ms;
+        vsync_ms = (vsync_end_tick - render_end_tick) * ticks_to_ms;
 
-            if ((outcode0 | outcode1) == 0) {
-                draw_line(x0, y0, x1, y1, 1); // Trivial accept
-            } else if ((outcode0 & outcode1) != 0) {
-                continue; // Trivial reject
-            } else {
-                if (liang_barsky_clip(&x0, &y0, &x1, &y1)) { // Clip
-                    draw_line(x0, y0, x1, y1, 1);
-                }
-            }
+        frame_count++;
+        total_ticks += vsync_end_tick - start_tick;
+        if (frame_count >= 60) {
+            fps = (int)(60.0f / (total_ticks * ticks_to_ms));
+            frame_count = 0;
+            total_ticks = 0;
         }
 
-        vsync();
+        // --- Draw HUD ---
+        char buffer[32];
+        sprintf(buffer, "FPS: %d", fps);
+        draw_string(5, 5, buffer, 2);
+        sprintf(buffer, "LOGIC: %.2fms", logic_ms);
+        draw_string(5, 15, buffer, 2);
+        sprintf(buffer, "RENDER: %.2fms", render_ms);
+        draw_string(5, 25, buffer, 2);
+        sprintf(buffer, "VSYNC: %.2fms", vsync_ms);
+        draw_string(5, 35, buffer, 2);
+
         flip_page();
 
         angle_x += 2;
